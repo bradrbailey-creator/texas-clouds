@@ -137,4 +137,71 @@
         (layer) => crossFadeTo(layer, `${primary.toUpperCase()} ${frames[frameIdx]}`),
         () => loadFrame(secondary, frames[frameIdx],
           (layer2) => crossFadeTo(layer2, `${secondary.toUpperCase()} ${frames[frameIdx]}`),
-          () => crossFadeTo(esri, `ESRI fallback (no ${primary}/${secondary} til
+          () => crossFadeTo(esri, `ESRI fallback (no ${primary}/${secondary} tiles)`)));
+    }
+
+    function crossFadeTo(nextLayer, label) {
+      setStatus(`Using ${label}`);
+      // prepare B as incoming layer
+      if (!bLayer) { bLayer = nextLayer; bLayer.setOpacity(1); aLayer && map.removeLayer(aLayer); aLayer = bLayer; bLayer = null; return; }
+      bLayer = nextLayer;
+      let alpha = 0;
+      const step = () => {
+        alpha += 0.15;
+        if (alpha >= 1) {
+          bLayer.setOpacity(1);
+          aLayer && map.removeLayer(aLayer);
+          aLayer = bLayer; bLayer = null;
+        } else {
+          bLayer.setOpacity(alpha);
+          aLayer && aLayer.setOpacity(1 - alpha);
+          requestAnimationFrame(step);
+        }
+      };
+      requestAnimationFrame(step);
+    }
+
+    function baseOrderFor(sel) {
+      if (sel === 'goes') return ['goes','viirs'];
+      if (sel === 'viirs') return ['viirs','goes'];
+      return ['goes','viirs']; // still try NASA first; Esri is only per-frame fallback
+    }
+
+    // Controls
+    function play(){ if (playing) return; playing = true; playBtn.textContent = '⏸ Pause'; tick(); }
+    function pause(){ playing = false; playBtn.textContent = '▶ Play'; if (timer) { clearTimeout(timer); timer=null; } }
+    function tick(){
+      if (!playing) return;
+      const order = baseOrderFor(baseSel.value);
+      showFrame(frameIdx, order);
+      const delay = parseInt(speedSel.value, 10) || 700;
+      timer = setTimeout(() => {
+        frameIdx = (frameIdx + 1) % frames.length;
+        tick();
+      }, delay);
+    }
+
+    playBtn.onclick = () => (playing ? pause() : play());
+    speedSel.onchange = () => { /* speed takes effect next tick */ };
+    baseSel.onchange  = () => { pause(); // redraw current frame with new base preference
+      const order = baseOrderFor(baseSel.value);
+      showFrame(frameIdx, order);
+    };
+
+    // Kick things off: draw last frame once, don’t autoplay like a maniac
+    showFrame(frameIdx, baseOrderFor(baseSel.value));
+    setStatus('Ready. Press Play to animate.');
+
+    // -------- Texas outline (accurate geometry) --------
+    fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', { cache: 'no-cache' })
+      .then(r => r.json())
+      .then(geo => {
+        const tx = geo.features.find(f => (f.properties?.name === 'Texas' || f.properties?.NAME === 'Texas'));
+        const texas = L.geoJSON(tx, { style: { color: '#00ffff', weight: 2.5, opacity: 0.95, fill: false } }).addTo(map);
+        map.fitBounds(texas.getBounds(), { padding: [12, 12] });
+        texas.bringToFront();
+      })
+      .catch(() => {/* if blocked, skip outline silently */});
+  </script>
+</body>
+</html>
