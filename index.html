@@ -2,10 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Live Clouds + Texas Outline (accurate)</title>
+  <title>GOES-East GeoColor + Texas Outline</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin />
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin />
   <style>
     html, body, #map { height: 100%; margin: 0; }
     .status {
@@ -17,44 +19,46 @@
 </head>
 <body>
   <div id="map"></div>
-  <div class="status" id="status">Loading…</div>
+  <div class="status" id="status">Loading GOES-East…</div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin></script>
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin></script>
 
   <script>
     const map = L.map('map').setView([31, -99], 6);
     const statusEl = document.getElementById('status');
 
-    // Live clouds: NASA GIBS VIIRS True Color (latest available; Level 0–9)
-    L.tileLayer(
-      'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg',
-      { attribution: 'Imagery © NASA GIBS/VIIRS', minZoom: 1, maxZoom: 9, tileSize: 256, crossOrigin: true }
+    // GOES-East GeoColor from NASA GIBS (near-real-time; ~5–10 minute cadence)
+    // Use 'default' to get the latest available timestep.
+    // Note: GOES tiles support deeper zoom than VIIRS; cap at 13 for performance.
+    const goes = L.tileLayer(
+      'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/GoogleMapsCompatible_Level13/{z}/{y}/{x}.jpg',
+      { attribution: 'Imagery © NASA GIBS/NOAA GOES', minZoom: 1, maxZoom: 13, tileSize: 256, crossOrigin: true }
     ).addTo(map);
 
-    // Fetch proper US states GeoJSON and filter to Texas
+    // Fallback to VIIRS True Color if GOES tiles are blocked/unavailable
+    const viirs = L.tileLayer(
+      'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg',
+      { attribution: 'Imagery © NASA GIBS/VIIRS', minZoom: 1, maxZoom: 9, tileSize: 256, crossOrigin: true }
+    );
+
+    let goesLoaded = false;
+    goes.on('load', () => { goesLoaded = true; statusEl.textContent = 'GOES-East loaded'; setTimeout(()=>statusEl.remove(),1500); });
+    goes.on('tileerror', e => console.warn('GOES tile error', e.coords));
+    setTimeout(() => {
+      if (!goesLoaded) {
+        console.warn('Switching to VIIRS fallback (GOES not loading)');
+        map.removeLayer(goes);
+        viirs.addTo(map);
+        statusEl.textContent = 'Using VIIRS fallback (hourly latency)';
+        setTimeout(()=>statusEl.remove(),2500);
+      }
+    }, 4000);
+
+    // Texas outline (accurate geometry from US-states GeoJSON)
     fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', { cache: 'no-cache' })
       .then(r => r.json())
       .then(geo => {
-        const tx = geo.features.find(f => {
-          const p = f.properties || {};
-          return p.name === 'Texas' || p.NAME === 'Texas';
-        });
-        if (!tx) throw new Error('Texas not found in states file');
-
-        const texas = L.geoJSON(tx, {
-          style: { color: '#00ffff', weight: 2.5, opacity: 0.95, fill: false }
-        }).addTo(map);
-
-        map.fitBounds(texas.getBounds(), { padding: [12, 12] });
-        texas.bringToFront();
-        statusEl.textContent = 'Texas outline loaded';
-        setTimeout(() => statusEl.remove(), 1500);
-      })
-      .catch(err => {
-        console.error(err);
-        statusEl.textContent = 'Could not load Texas outline (network blocked?)';
-      });
-  </script>
-</body>
-</html>
+        const tx = geo.features.find(f => (f.properties?.name === 'Texas' || f.properties?.NAME === 'Texas'));
+        const texas = L.geoJSON(tx, { style: { color: '#00ffff', weight: 2.5, opacity: 0.95, fill: false } }).add
