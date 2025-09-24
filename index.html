@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>GOES-East GeoColor + Texas Outline</title>
+  <title>GOES-East GeoColor + Texas Outline (stable)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet"
         href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -29,36 +29,48 @@
     const map = L.map('map').setView([31, -99], 6);
     const statusEl = document.getElementById('status');
 
-    // GOES-East GeoColor from NASA GIBS (near-real-time; ~5–10 minute cadence)
-    // Use 'default' to get the latest available timestep.
-    // Note: GOES tiles support deeper zoom than VIIRS; cap at 13 for performance.
+    // GOES-East GeoColor (use Level9 matrix that GIBS guarantees for GoogleMapsCompatible)
     const goes = L.tileLayer(
-      'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/GoogleMapsCompatible_Level13/{z}/{y}/{x}.jpg',
-      { attribution: 'Imagery © NASA GIBS/NOAA GOES', minZoom: 1, maxZoom: 13, tileSize: 256, crossOrigin: true }
-    ).addTo(map);
+      'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg',
+      { attribution: 'Imagery © NASA GIBS / NOAA GOES', minZoom: 1, maxZoom: 9, tileSize: 256, crossOrigin: true }
+    );
 
-    // Fallback to VIIRS True Color if GOES tiles are blocked/unavailable
+    // VIIRS (fallback; slower cadence)
     const viirs = L.tileLayer(
       'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg',
-      { attribution: 'Imagery © NASA GIBS/VIIRS', minZoom: 1, maxZoom: 9, tileSize: 256, crossOrigin: true }
+      { attribution: 'Imagery © NASA GIBS / VIIRS', minZoom: 1, maxZoom: 9, tileSize: 256, crossOrigin: true }
     );
 
     let goesLoaded = false;
-    goes.on('load', () => { goesLoaded = true; statusEl.textContent = 'GOES-East loaded'; setTimeout(()=>statusEl.remove(),1500); });
+    goes.on('load', () => {
+      goesLoaded = true;
+      statusEl.textContent = 'GOES-East GeoColor (near-real-time)';
+      setTimeout(() => statusEl.remove(), 1500);
+    });
     goes.on('tileerror', e => console.warn('GOES tile error', e.coords));
+    goes.addTo(map);
+
+    // If GOES doesn’t load quickly, fall back to VIIRS
     setTimeout(() => {
       if (!goesLoaded) {
         console.warn('Switching to VIIRS fallback (GOES not loading)');
         map.removeLayer(goes);
         viirs.addTo(map);
         statusEl.textContent = 'Using VIIRS fallback (hourly latency)';
-        setTimeout(()=>statusEl.remove(),2500);
+        setTimeout(() => statusEl.remove(), 2500);
       }
     }, 4000);
 
-    // Texas outline (accurate geometry from US-states GeoJSON)
+    // Texas outline (accurate)
     fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', { cache: 'no-cache' })
       .then(r => r.json())
       .then(geo => {
         const tx = geo.features.find(f => (f.properties?.name === 'Texas' || f.properties?.NAME === 'Texas'));
-        const texas = L.geoJSON(tx, { style: { color: '#00ffff', weight: 2.5, opacity: 0.95, fill: false } }).add
+        const texas = L.geoJSON(tx, { style: { color: '#00ffff', weight: 2.5, opacity: 0.95, fill: false } }).addTo(map);
+        map.fitBounds(texas.getBounds(), { padding: [12, 12] });
+        texas.bringToFront();
+      })
+      .catch(() => {/* if blocked, skip outline silently */});
+  </script>
+</body>
+</html>
