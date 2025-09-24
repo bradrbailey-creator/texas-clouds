@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>GOES-East GeoColor — Animated + Texas Outline</title>
+  <title>NOAA GOES GeoColor + Texas</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet"
         href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -10,189 +10,54 @@
         crossorigin />
   <style>
     html, body, #map { height: 100%; margin: 0; background:#000; }
-    .hud {
-      position: absolute; z-index: 1000; left: 8px; bottom: 8px;
-      display: flex; gap: 8px; align-items: center;
-      background: rgba(0,0,0,.6); color: #fff; padding: 6px 8px; border-radius: 8px;
+    .status {
+      position: absolute; z-index: 1000; top: 8px; left: 8px;
+      background: rgba(0,0,0,.6); color: #fff; padding: 6px 8px; border-radius: 6px;
       font: 12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     }
-    .hud button, .hud select {
-      background: #111; color:#fff; border: 1px solid #555; border-radius: 6px; padding: 4px 8px;
-      cursor: pointer;
-    }
-    .hud .dim { opacity:.75 }
-    .banner {
-      position:absolute; z-index:1000; top:8px; left:8px; color:#fff;
-      background: rgba(0,0,0,.6); padding:6px 8px; border-radius:8px; font:12px/1.2 system-ui;
-    }
-    .time { font-weight:600 }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div class="banner" id="banner">Initializing…</div>
-  <div class="hud">
-    <button id="playPause">▶ Play</button>
-    <label class="dim">Speed
-      <select id="speed">
-        <option value="1200">Slow</option>
-        <option value="700" selected>Normal</option>
-        <option value="350">Fast</option>
-      </select>
-    </label>
-    <span class="dim">Frame <span id="idx">0</span>/<span id="len">0</span></span>
-    <span class="dim">UTC <span id="ts" class="time">—</span></span>
-    <label class="dim">Base
-      <select id="base">
-        <option value="goes" selected>GOES-East</option>
-        <option value="viirs">VIIRS</option>
-        <option value="esri">Esri</option>
-      </select>
-    </label>
-  </div>
+  <div class="status" id="status">Loading NOAA GOES…</div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
           crossorigin></script>
 
   <script>
-    // -------- Map base --------
     const map = L.map('map').setView([31, -99], 6);
-    const banner = document.getElementById('banner');
-    const playBtn = document.getElementById('playPause');
-    const speedSel = document.getElementById('speed');
-    const baseSel  = document.getElementById('base');
-    const idxEl    = document.getElementById('idx');
-    const lenEl    = document.getElementById('len');
-    const tsEl     = document.getElementById('ts');
+    const statusEl = document.getElementById('status');
 
-    // Layer factories (time-aware for GOES/VIIRS)
-    const goesURL = (isoTime) =>
-      `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/${isoTime}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
-    const viirsURL = (isoTime) =>
-      `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${isoTime}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
+    // NOAA STAR GOES-16 CONUS GeoColor (fresh ~5–10 min)
+    const noaa = L.tileLayer(
+      'https://tiles.star.nesdis.noaa.gov/tiles/GEO/GOES16/CONUS/GeoColor/{z}/{x}/{y}.jpg',
+      { attribution: 'Imagery © NOAA STAR/GOES-16', minZoom: 1, maxZoom: 10, tileSize: 256, crossOrigin: true }
+    );
 
-    const makeTile = (url) => L.tileLayer(url, {
-      minZoom: 1, maxZoom: 9, tileSize: 256, crossOrigin: true
-    });
-
+    // Esri fallback (static)
     const esri = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       { attribution: 'Tiles © Esri' }
     );
 
-    // -------- Timeline: last ~2 hours at 10-minute cadence, UTC rounded down --------
-    function pad(n){ return n < 10 ? '0'+n : ''+n; }
-    function roundDownTo10Min(date) {
-      const d = new Date(date.getTime());
-      d.setUTCMinutes(Math.floor(d.getUTCMinutes()/10)*10, 0, 0);
-      return d;
-    }
-    function toISO8601Z(d) { // "YYYY-MM-DDTHH:MM:00Z"
-      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00Z`;
-    }
-    const now = roundDownTo10Min(new Date());
-    const frames = [];
-    for (let i=12; i>=0; i--) { // ~130 minutes lookback
-      const t = new Date(now.getTime() - i*10*60*1000);
-      frames.push(toISO8601Z(t));
-    }
-    lenEl.textContent = frames.length;
+    let noaaLoaded = false;
+    noaa.on('load', () => { noaaLoaded = true; statusEl.textContent = 'NOAA GOES-16 GeoColor'; setTimeout(()=>statusEl.remove(),1500); });
+    noaa.on('tileerror', e => console.warn('NOAA tile error', e.coords));
+    noaa.addTo(map);
 
-    // -------- Animated overlay: cross-fade between two tile layers --------
-    let aLayer = null, bLayer = null;
-    let frameIdx = frames.length - 1;
-    let playing = false;
-    let timer = null;
+    // Auto-fallback after 3s if NOAA doesn’t load
+    setTimeout(() => {
+      if (!noaaLoaded) {
+        console.warn('Switching to Esri fallback');
+        map.removeLayer(noaa);
+        esri.addTo(map);
+        statusEl.textContent = 'Using Esri fallback (NOAA blocked/unavailable)';
+        setTimeout(()=>statusEl.remove(),2500);
+      }
+    }, 3000);
 
-    // attempt to load a frame for a given base ('goes' or 'viirs'), with fallback to esri if blocked entirely
-    function loadFrame(base, isoTime, onLoaded, onFailed) {
-      let layer;
-      if (base === 'goes') layer = makeTile(goesURL(isoTime));
-      else if (base === 'viirs') layer = makeTile(viirsURL(isoTime));
-      else layer = esri;
-
-      let done = false;
-      const clean = () => { layer.off('load'); layer.off('tileerror'); };
-
-      layer.on('load', () => { if (!done) { done = true; clean(); onLoaded(layer); } });
-      layer.on('tileerror', () => { /* some frames may 404; treat as failure quickly */ if (!done) { done = true; clean(); onFailed(); } });
-
-      // safety timeout (4s) to bail if silently blocked
-      setTimeout(() => { if (!done) { done = true; clean(); onFailed(); } }, 4000);
-
-      layer.setOpacity(0).addTo(map);
-    }
-
-    function setStatus(msg){ banner.textContent = msg; }
-
-    function showFrame(newIdx, baseOrder) {
-      frameIdx = newIdx;
-      idxEl.textContent = (frameIdx+1);
-      tsEl.textContent = frames[frameIdx].replace('T',' ').replace(':00Z','Z');
-
-      // Try primary base first, then secondary, then esri
-      const [primary, secondary] = baseOrder;
-      loadFrame(primary, frames[frameIdx],
-        (layer) => crossFadeTo(layer, `${primary.toUpperCase()} ${frames[frameIdx]}`),
-        () => loadFrame(secondary, frames[frameIdx],
-          (layer2) => crossFadeTo(layer2, `${secondary.toUpperCase()} ${frames[frameIdx]}`),
-          () => crossFadeTo(esri, `ESRI fallback (no ${primary}/${secondary} tiles)`)));
-    }
-
-    function crossFadeTo(nextLayer, label) {
-      setStatus(`Using ${label}`);
-      // prepare B as incoming layer
-      if (!bLayer) { bLayer = nextLayer; bLayer.setOpacity(1); aLayer && map.removeLayer(aLayer); aLayer = bLayer; bLayer = null; return; }
-      bLayer = nextLayer;
-      let alpha = 0;
-      const step = () => {
-        alpha += 0.15;
-        if (alpha >= 1) {
-          bLayer.setOpacity(1);
-          aLayer && map.removeLayer(aLayer);
-          aLayer = bLayer; bLayer = null;
-        } else {
-          bLayer.setOpacity(alpha);
-          aLayer && aLayer.setOpacity(1 - alpha);
-          requestAnimationFrame(step);
-        }
-      };
-      requestAnimationFrame(step);
-    }
-
-    function baseOrderFor(sel) {
-      if (sel === 'goes') return ['goes','viirs'];
-      if (sel === 'viirs') return ['viirs','goes'];
-      return ['goes','viirs']; // still try NASA first; Esri is only per-frame fallback
-    }
-
-    // Controls
-    function play(){ if (playing) return; playing = true; playBtn.textContent = '⏸ Pause'; tick(); }
-    function pause(){ playing = false; playBtn.textContent = '▶ Play'; if (timer) { clearTimeout(timer); timer=null; } }
-    function tick(){
-      if (!playing) return;
-      const order = baseOrderFor(baseSel.value);
-      showFrame(frameIdx, order);
-      const delay = parseInt(speedSel.value, 10) || 700;
-      timer = setTimeout(() => {
-        frameIdx = (frameIdx + 1) % frames.length;
-        tick();
-      }, delay);
-    }
-
-    playBtn.onclick = () => (playing ? pause() : play());
-    speedSel.onchange = () => { /* speed takes effect next tick */ };
-    baseSel.onchange  = () => { pause(); // redraw current frame with new base preference
-      const order = baseOrderFor(baseSel.value);
-      showFrame(frameIdx, order);
-    };
-
-    // Kick things off: draw last frame once, don’t autoplay like a maniac
-    showFrame(frameIdx, baseOrderFor(baseSel.value));
-    setStatus('Ready. Press Play to animate.');
-
-    // -------- Texas outline (accurate geometry) --------
+    // Accurate Texas outline
     fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', { cache: 'no-cache' })
       .then(r => r.json())
       .then(geo => {
@@ -201,7 +66,7 @@
         map.fitBounds(texas.getBounds(), { padding: [12, 12] });
         texas.bringToFront();
       })
-      .catch(() => {/* if blocked, skip outline silently */});
+      .catch(() => {/* outline fetch blocked; skip */});
   </script>
 </body>
 </html>
